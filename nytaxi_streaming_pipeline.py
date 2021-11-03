@@ -11,6 +11,7 @@ from apache_beam.options.pipeline_options import PipelineOptions
 from apache_beam.options.pipeline_options import StandardOptions
 from apache_beam.transforms.combiners import CountCombineFn
 from apache_beam.runners import DataflowRunner, DirectRunner
+from apache_beam.transforms.trigger import AfterWatermark,AfterCount,AfterProcessingTime,AccumulationMode
 
 # ### functions and classes
 
@@ -146,9 +147,12 @@ def run():
                      #| 'ParseJson' >> beam.Map(parse_json).with_output_types(CommonLog))
                      | 'ParseJson' >> beam.Map(parse_json))
     
-    (parsed_msgs
+    (parsed_msgs 
+        | "BatchOver10s" >> beam.WindowInto(beam.window.FixedWindows(120),
+                                            trigger=AfterProcessingTime(120),
+                                            accumulation_mode=AccumulationMode.DISCARDING)
         #| "AddProcessingTimestamp" >> beam.Map(add_processing_timestamp)
-        | "WriteToGCS" >> fileio.WriteToFiles(raw_table_name)
+        | "WriteToGCS" >> fileio.WriteToFiles(raw_table_name,shards=1,max_writers_per_bundle=0)
     )
 
     # (parsed_msgs
