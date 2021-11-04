@@ -16,28 +16,30 @@ from apache_beam.transforms.trigger import AfterWatermark,AfterCount,AfterProces
 # ### functions and classes
 
 class CommonLog(typing.NamedTuple):
-    ip: str
-    user_id: str
-    lat: float
-    lng: float
+    ride_id: str
+    point_idx: int
+    latitude: float
+    longitude: float
     timestamp: str
-    http_request: str
-    http_response: int
-    num_bytes: int
-    user_agent: str
+    meter_reading: float
+    meter_increment: float
+    ride_status: str
+    passenger_count: int
 
 beam.coders.registry.register_coder(CommonLog, beam.coders.RowCoder)
 
 def parse_json(element):
-    row = json.dumps(json.loads(element.decode('utf-8')))
-    #return CommonLog(**row)
-    return row
+    row = json.loads(element.decode('utf-8'))
+    return CommonLog(**row)
 
 def add_processing_timestamp(element):
     row = element._asdict()
     row['event_timestamp'] = row.pop('timestamp')
     row['processing_timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return row
+
+def is_pickup_dropoff(element):
+    return element['ride_status'] == 'pickup' or element['ride_status'] == 'dropoff'
 
 class GetTimestampFn(beam.DoFn):
     def process(self, element, window=beam.DoFn.WindowParam):
@@ -73,8 +75,7 @@ def run():
 
     input_topic = opts.input_topic
     raw_table_name = opts.raw_table_name
-    #agg_table_name = opts.agg_table_name
-    #window_duration = opts.window_duration
+    pickup_dropoff_table="nycity1:taxi.trip_pickup_dropoff"
 
     # Table schema for BigQuery
     agg_table_schema = {
@@ -91,27 +92,25 @@ def run():
         ]
     }
 
-    raw_table_schema = {
+    trip_table_schema = {
         "fields": [
             {
-                "name": "ip",
-                "type": "STRING"
+                "name": "ride_id",
+                "type": "STRING",
+                "mode":"REQUIRED"
             },
             {
-                "name": "user_id",
-                "type": "STRING"
+                "name": "point_idx",
+                "type": "INTEGER",
+                "mode":"NULLABLE"
             },
             {
-                "name": "user_agent",
-                "type": "STRING"
-            },
-            {
-                "name": "lat",
+                "name": "latitude",
                 "type": "FLOAT",
                 "mode": "NULLABLE"
             },
             {
-                "name": "lng",
+                "name": "longitude",
                 "type": "FLOAT",
                 "mode": "NULLABLE"
             },
@@ -121,18 +120,22 @@ def run():
             },
             {
                 "name": "processing_timestamp",
+                "type": "TIMESTAMP"
+            },
+            {
+                "name": "meter_reading",
+                "type": "FLOAT"
+            },
+            {
+                "name": "meter_increment",
+                "type": "FLOAT"
+            },
+            {
+                "name": "ride_status",
                 "type": "STRING"
             },
             {
-                "name": "http_request",
-                "type": "STRING"
-            },
-            {
-                "name": "http_response",
-                "type": "INTEGER"
-            },
-            {
-                "name": "num_bytes",
+                "name": "passenger_count",
                 "type": "INTEGER"
             }
         ]
@@ -144,38 +147,25 @@ def run():
 
 
     parsed_msgs = (p | 'ReadFromPubSub' >> beam.io.ReadFromPubSub(input_topic)
-                     #| 'ParseJson' >> beam.Map(parse_json).with_output_types(CommonLog))
-                     | 'ParseJson' >> beam.Map(parse_json))
+                     | 'ParseJson' >> beam.Map(parse_json).with_output_types(CommonLog)
+                     | 'AddTimeStamp' >> beam.Map(add_processing_timestamp))
     
+    #Streaming to trip table
     (parsed_msgs 
-        | "BatchOver10s" >> beam.WindowInto(beam.window.FixedWindows(120),
-                                            trigger=AfterProcessingTime(120),
-                                            accumulation_mode=AccumulationMode.DISCARDING)
-        #| "AddProcessingTimestamp" >> beam.Map(add_processing_timestamp)
-        | "WriteToGCS" >> fileio.WriteToFiles(raw_table_name,shards=1,max_writers_per_bundle=0)
+        | "WriteToTrip" >> beam.io.WriteToBigQuery(raw_table_name,
+                                                       schema=trip_table_schema,
+                                                       create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
+                                                       write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND)
     )
-
-    # (parsed_msgs
-    #     | "AddProcessingTimestamp" >> beam.Map(add_processing_timestamp)
-    #     | 'WriteRawToBQ' >> beam.io.WriteToBigQuery(
-    #         raw_table_name,
-    #         schema=raw_table_schema,
-    #         create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
-    #         write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND
-    #         )
-    #     )
-
-    # (parsed_msgs
-    #     | "WindowByMinute" >> beam.WindowInto(beam.window.FixedWindows(60))
-    #     | "CountPerMinute" >> beam.CombineGlobally(CountCombineFn()).without_defaults()
-    #     | "AddWindowTimestamp" >> beam.ParDo(GetTimestampFn())
-    #     | 'WriteAggToBQ' >> beam.io.WriteToBigQuery(
-    #         agg_table_name,
-    #         schema=agg_table_schema,
-    #         create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
-    #         write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND
-    #         )
-    # )
+    
+    # Streaming data to pickup_dropoff table
+    (parsed_msgs 
+        | "FilterPickupDropoff" >> beam.Filter(is_pickup_dropoff)
+        | "WriteToPickupDropoff" >> beam.io.WriteToBigQuery(pickup_dropoff_table,
+                                                       schema=trip_table_schema,
+                                                       create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
+                                                       write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND)
+    )
 
     logging.getLogger().setLevel(logging.INFO)
     logging.info("Building pipeline ...")
