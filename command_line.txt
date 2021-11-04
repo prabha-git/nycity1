@@ -1,4 +1,4 @@
 python nytaxi_streaming_pipeline.py --project=nycity1 --region=us-central1 --staging_location=gs://nycity1-staging/ \
 --temp_location=gs://nycity1-temp/  \
---runner=DirectRunner --input_topic=projects/pubsub-public-data/topics/taxirides-realtime  \
---raw_table_name=gs://nycity1-trip
+--runner=DataflowRunner --input_topic=projects/pubsub-public-data/topics/taxirides-realtime  \
+--raw_table_name=nycity1:taxi.trip

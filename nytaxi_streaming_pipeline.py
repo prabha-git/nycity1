@@ -4,6 +4,7 @@ import logging
 import json
 import typing
 from datetime import datetime
+from pytz import timezone
 import apache_beam as beam
 from apache_beam.io import fileio
 from apache_beam.options.pipeline_options import GoogleCloudOptions
@@ -34,7 +35,7 @@ def parse_json(element):
 def add_processing_timestamp(element):
     row = element._asdict()
     row['event_timestamp'] = row.pop('timestamp')
-    row['processing_timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    row['processing_timestamp'] = datetime.now(timezone('UTC')).strftime("%Y-%m-%d %H:%M:%S")
     return row
 
 def is_pickup_dropoff(element):
@@ -74,7 +75,7 @@ def run():
 
     input_topic = opts.input_topic
     raw_table_name = opts.raw_table_name
-    pickup_dropoff_table="nycity1:taxi.trip_pickup_dropoff"
+    pickup_dropoff_table="nycity1:taxi.ride_pickup_dropoff"
 
     # Table schema for BigQuery
     agg_table_schema = {
@@ -91,7 +92,7 @@ def run():
         ]
     }
 
-    trip_table_schema = {
+    ride_table_schema = {
         "fields": [
             {
                 "name": "ride_id",
@@ -149,10 +150,10 @@ def run():
                      | 'ParseJson' >> beam.Map(parse_json).with_output_types(CommonLog)
                      | 'AddTimeStamp' >> beam.Map(add_processing_timestamp))
     
-    #Streaming to trip table
+    #Streaming to ride table
     (parsed_msgs 
-        | "WriteToTrip" >> beam.io.WriteToBigQuery(raw_table_name,
-                                                       schema=trip_table_schema,
+        | "WriteToRide" >> beam.io.WriteToBigQuery(raw_table_name,
+                                                       schema=ride_table_schema,
                                                        create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
                                                        write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND)
     )
@@ -161,7 +162,7 @@ def run():
     (parsed_msgs 
         | "FilterPickupDropoff" >> beam.Filter(is_pickup_dropoff)
         | "WriteToPickupDropoff" >> beam.io.WriteToBigQuery(pickup_dropoff_table,
-                                                       schema=trip_table_schema,
+                                                       schema=ride_table_schema,
                                                        create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
                                                        write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND)
     )
