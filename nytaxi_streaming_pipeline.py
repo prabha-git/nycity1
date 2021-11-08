@@ -17,24 +17,19 @@ from apache_beam.runners import DataflowRunner, DirectRunner
 
 class CommonLog(typing.NamedTuple):
     ride_id: str
-    point_idx: int
-    latitude: float
-    longitude: float
-    timestamp: str
-    meter_reading: float
-    meter_increment: float
-    ride_status: str
-    passenger_count: int
+    timestamp_utc: str
+    event_type: str
 
 beam.coders.registry.register_coder(CommonLog, beam.coders.RowCoder)
 
 def parse_json(element):
+    print(element)
     row = json.loads(element.decode('utf-8'))
     return CommonLog(**row)
 
 def add_processing_timestamp(element):
     row = element._asdict()
-    row['event_timestamp'] = row.pop('timestamp')
+    row['event_timestamp'] = row.pop('timestamp_utc')
     row['processing_timestamp'] = datetime.now(timezone('UTC')).strftime("%Y-%m-%d %H:%M:%S")
     return row
 
@@ -75,23 +70,9 @@ def run():
 
     input_topic = opts.input_topic
     raw_table_name = opts.raw_table_name
-    pickup_dropoff_table="nycity1:taxi.ride_pickup_dropoff"
+    #pickup_dropoff_table="nycity1:taxi.ride_pickup_dropoff"
 
     # Table schema for BigQuery
-    agg_table_schema = {
-        "fields": [
-            {
-                "name": "page_views",
-                "type": "INTEGER"
-            },
-            {
-                "name": "timestamp",
-                "type": "STRING"
-            },
-
-        ]
-    }
-
     ride_table_schema = {
         "fields": [
             {
@@ -100,43 +81,16 @@ def run():
                 "mode":"REQUIRED"
             },
             {
-                "name": "point_idx",
-                "type": "INTEGER",
-                "mode":"NULLABLE"
-            },
-            {
-                "name": "latitude",
-                "type": "FLOAT",
-                "mode": "NULLABLE"
-            },
-            {
-                "name": "longitude",
-                "type": "FLOAT",
-                "mode": "NULLABLE"
-            },
-            {
                 "name": "event_timestamp",
-                "type": "STRING"
+                "type": "TIMESTAMP"
             },
             {
                 "name": "processing_timestamp",
                 "type": "TIMESTAMP"
             },
             {
-                "name": "meter_reading",
-                "type": "FLOAT"
-            },
-            {
-                "name": "meter_increment",
-                "type": "FLOAT"
-            },
-            {
-                "name": "ride_status",
+                "name": "event_type",
                 "type": "STRING"
-            },
-            {
-                "name": "passenger_count",
-                "type": "INTEGER"
             }
         ]
     }
@@ -158,14 +112,14 @@ def run():
                                                        write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND)
     )
     
-    # Streaming data to pickup_dropoff table
-    (parsed_msgs 
-        | "FilterPickupDropoff" >> beam.Filter(is_pickup_dropoff)
-        | "WriteToPickupDropoff" >> beam.io.WriteToBigQuery(pickup_dropoff_table,
-                                                       schema=ride_table_schema,
-                                                       create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
-                                                       write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND)
-    )
+    # # Streaming data to pickup_dropoff table
+    # (parsed_msgs 
+    #     | "FilterPickupDropoff" >> beam.Filter(is_pickup_dropoff)
+    #     | "WriteToPickupDropoff" >> beam.io.WriteToBigQuery(pickup_dropoff_table,
+    #                                                    schema=ride_table_schema,
+    #                                                    create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
+    #                                                    write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND)
+    # )
 
     logging.getLogger().setLevel(logging.INFO)
     logging.info("Building pipeline ...")
